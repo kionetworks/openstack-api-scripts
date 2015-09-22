@@ -9,6 +9,7 @@
 source bsfl
 
 LOG_ENABLED=y
+TEST="y"
 
 generate_UUID_file () {
     nova list --all-tenants | grep  Running | cut -d\| -f2 | sed 's/^[ \t]*//;s/[ \t]*$//' > $1
@@ -51,10 +52,17 @@ cmd "export OS_TENANT_NAME=XXXXXXX"
 
 msg "Generate temp file with all UUIDs of running instances"
 
-UUID_FILE=$(mktemp)
+if [ "$TEST" == "y" ]; then
+    UUID_FILE="test_instance_id.txt"
+else
+    UUID_FILE=$(mktemp)
+fi
+
 VOLUMES_FILE=$(mktemp)
 
-cmd "generate_UUID_file $UUID_FILE $VOLUMES_FILE"
+if [ "$TEST" != "y" ]; then
+    cmd "generate_UUID_file $UUID_FILE $VOLUMES_FILE"
+fi
 
 if [ -f uuids_no_qemu_agent.txt ]; then
     rm uuids_no_qemu_agent.txt
@@ -65,20 +73,72 @@ for UUID in `cat $UUID_FILE`; do
     msg "Get compute where $UUID is stored"
     COMPUTE=`get_compute_host $UUID`
     msg_ok "$COMPUTE for $UUID"
-    msg "Get attached volumes"
-    get_attached_volumes $UUID
     msg "Status of QEMU agent for instance $UUID"
     ssh $COMPUTE "virsh qemu-agent-command  $UUID '{\"execute\":\"guest-fsfreeze-status\"}'"
     if [ $? -eq 0 ]; then
         msg_ok "QEMU agent installed"
         #TODO Make the snapshots
+        msg "Freezing instance"
+        ssh $COMPUTE "virsh qemu-agent-command $UUID '{\"execute\":\"guest-fsfreeze-freeze\"}'"
+        if [ $? -eq 0 ]; then
+            msg_ok "Instance is freezed"
+            sleep 1
+            msg "Get status of the instance"
+            ssh $COMPUTE "virsh qemu-agent-command $UUID '{\"execute\":\"guest-fsfreeze-status\"}'"
+            sleep 1
+            msg "Get attached volumes"
+            for VOL in `get_attached_volumes $UUID`; do
+                msg "Create snap fo $VOL"
+                SNAPNAME=`date +%Y-%m-%d_%H%M`
+                ssh $COMPUTE "rbd snap create ${VOL}@${SNAPNAME} 2>/dev/null"
+                if [ $? -eq 0 ]; then
+                    msg_ok "Snap of $VOL created"
+                    ssh $COMPUTE "rbd snap ls $VOL 2>/dev/null" 
+                fi
+                # Al ejecutar comandos de rbd se obtiene el siguiente mensaje
+                #
+                # 2015-09-22 11:32:45.793711 7f49875df840 -1 asok(0x35699e0) AdminSocketConfigObs::init: 
+                # failed: AdminSocket::bind_and_listen: failed to bind the UNIX domain 
+                # socket to '/var/run/ceph/rbd-client-107058.asok': (2) No such file or directory
+                # 
+                # Parece que no implica problema en la creación del snapshot de los vols
+                # Por el momento se redirecciona el error a /dev/null
+                if [ "$TEST" == "y" ]; then
+                    # Delete snapshot
+                    ssh $COMPUTE "rbd snap unprotect ${VOL}@${SNAPNAME} 2>/dev/null"
+                    ssh $COMPUTE "rbd snap rm ${VOL}@${SNAPNAME} 2>/dev/null"
+                fi
+            done
+            # Copy the disk file
+            SNAPNAME=`date +%Y-%m-%d_%H%M`
+            ssh $COMPUTE "ls /var/lib/nova/instances/$UUID/disk"
+            if [ $? -eq 0 ]; then
+                msg "/var/lib/nova/instances/$UUID/disk exists"
+                msg "Creating the snapshot of disk"
+                ssh $COMPUTE "rsync -avzP /var/lib/nova/instances/$UUID/disk /var/lib/nova/instances/$UUID/disk_${SNAPNAME}"
+                if [ $? -eq 0 ]; then
+                    msg_ok "/var/lib/nova/instances/$UUID/disk_${SNAPNAME} created"
+                fi
+            else
+                msg_info "/var/lib/nova/instances/$UUID/disk does not exist"
+            fi
+            msg "Unfreeze the instance"
+            ssh $COMPUTE "virsh qemu-agent-command $UUID '{\"execute\":\"guest-fsfreeze-thaw\"}'"
+            if [ $? -eq 0 ]; then
+                msg_ok "Instance unfreezed"
+                ssh $COMPUTE "virsh qemu-agent-command $UUID '{\"execute\":\"guest-fsfreeze-status\"}'"
+            fi
+        else
+            msg_error "The instance could not be freezed"
+            exit 2
+        fi
     else
         msg_error "QEMU agent not installed for $UUID"
         echo "$UUID" >> uuids_no_qemu_agent.txt
     fi
 done
 
-if [ -f $UUID_FILE ]; then
+if [ -f $UUID_FILE -a "$TEST" != "y" ]; then
     rm $UUID_FILE
 fi
 
