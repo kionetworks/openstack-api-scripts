@@ -32,6 +32,11 @@ get_attached_volumes () {
     fi
 }
 
+get_instance_name () {
+    UUID=$1
+    nova show $UUID | grep "\<name\>" | awk '{print $4}'
+}
+
 if [ ! -d snapshots_logs ]; then
     mkdir snapshots_logs
 fi
@@ -69,7 +74,8 @@ if [ -f uuids_no_qemu_agent.txt ]; then
 fi
 
 for UUID in `cat $UUID_FILE`; do
-    echo "$UUID"
+    INSTANCE_NAME=`get_instance_name $UUID`
+    msg "Instance Name: $INSTANCE_NAME"
     msg "Get compute where $UUID is stored"
     COMPUTE=`get_compute_host $UUID`
     msg_ok "$COMPUTE for $UUID"
@@ -115,9 +121,18 @@ for UUID in `cat $UUID_FILE`; do
             if [ $? -eq 0 ]; then
                 msg "/var/lib/nova/instances/$UUID/disk exists"
                 msg "Creating the snapshot of disk"
-                ssh $COMPUTE "rsync -avzP /var/lib/nova/instances/$UUID/disk /var/lib/nova/instances/$UUID/disk_${SNAPNAME}"
+                #ssh $COMPUTE "rsync -avzP /var/lib/nova/instances/$UUID/disk /var/lib/nova/instances/$UUID/disk_${SNAPNAME}"
+                # --poll Report the snapshot progress and poll until image creation is complete.
+                OS_TENANT_NAME=XXXXXXX nova image-create --poll $UUID ${INSTANCE_NAME}_SNAP_$SNAPNAME
                 if [ $? -eq 0 ]; then
-                    msg_ok "/var/lib/nova/instances/$UUID/disk_${SNAPNAME} created"
+                    #msg_ok "/var/lib/nova/instances/$UUID/disk_${SNAPNAME} created"
+                    msg_ok "Snapshot created"
+                    OS_TENANT_NAME=XXXXXXX nova image-show ${INSTANCE_NAME}_SNAP_$SNAPNAME
+                    if [ $? -eq 0 ]; then
+                        msg_error "Error getting info of snapshot"
+                    fi
+                else
+                    msg_error "Cannot create the snapshot for ${INSTANCE_NAME}"
                 fi
             else
                 msg_info "/var/lib/nova/instances/$UUID/disk does not exist"
