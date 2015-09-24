@@ -153,6 +153,7 @@ for UUID in `cat $UUID_FILE`; do
                 fi
             else
                 msg_info "/var/lib/nova/instances/$UUID/disk does not exist"
+                msg_info "The instance has only volumes"
             fi
             msg "Unfreeze the instance"
             ssh $COMPUTE "virsh qemu-agent-command $UUID '{\"execute\":\"guest-fsfreeze-thaw\"}'"
