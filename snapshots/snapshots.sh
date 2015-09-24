@@ -160,8 +160,7 @@ for UUID in `cat $UUID_FILE`; do
                             if [ $? -eq 0 ]; then
                                 msg_ok "Rsyncing completed"
                                 msg "Creating symbolic link"
-                                ln -s /var/lib/nova/instances/snapshots_soriana/$SNAP_ID \ 
-                                    /var/lib/glance/images/$SNAP_ID 
+                                ln -s /var/lib/nova/instances/snapshots_soriana/$SNAP_ID /var/lib/glance/images/$SNAP_ID 
                                 # Cuando se utiliza nova image-delete, el link simbólico es borrado y la info de 
                                 # metadata también, por lo que ahora ya no es posible identificar, a qué máquina 
                                 # le correspondía el archivo en /var/lib/nova/instances/snapshots_soriana/
