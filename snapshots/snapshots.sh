@@ -134,43 +134,16 @@ for UUID in `cat $UUID_FILE`; do
             if [ $? -eq 0 ]; then
                 msg "/var/lib/nova/instances/$UUID/disk exists"
                 msg "Creating the snapshot of disk"
-                #ssh $COMPUTE "rsync -avzP /var/lib/nova/instances/$UUID/disk /var/lib/nova/instances/$UUID/disk_${SNAPNAME}"
                 # --poll Report the snapshot progress and poll until image creation is complete.
                 OS_TENANT_NAME=XXXXXXX nova image-create --poll $UUID ${INSTANCE_NAME}_SNAP_$SNAPNAME
                 if [ $? -eq 0 ]; then
-                    #msg_ok "/var/lib/nova/instances/$UUID/disk_${SNAPNAME} created"
                     msg_ok "Snapshot created"
                     OS_TENANT_NAME=XXXXXXX nova image-show ${INSTANCE_NAME}_SNAP_$SNAPNAME
                     if [ $? -eq 0 ]; then
                         msg_ok "Getting info of snapshot"
-                        # Actualmente Glance está sobre /, por lo que crear los snapshots
-                        # en esa ruta consumiría mucho espacio sobre ese file system.
-                        # Una opción es configurar Glance para que utilice Ceph; otra opción es
-                        # crear el directorio /var/lib/nova/instances/snapshots_soriana y una vez
-                        # que se haya creado el snapshot a través de nova image-create, obtener el ID
-                        # del snapshot, moverlo hacia el directorio mencionado y crear una liga 
-                        # simbólica en /var/lib/glance/images
                         msg "Get Glance ID of the snapshot"
                         SNAP_ID=`OS_TENANT_NAME=XXXXXXX get_snapshot_id ${INSTANCE_NAME}_SNAP_$SNAPNAME`
                         msg_ok "Snap ID $SNAP_ID"
-                        if [ -f /var/lib/glance/images/$SNAP_ID ]; then
-                            msg "Moving Snapshot file to /var/lib/nova/instances/snapshots_soriana/" 
-                            rsync --remove-source-files -avzP \
-                                /var/lib/glance/images/$SNAP_ID /var/lib/nova/instances/snapshots_soriana/
-                            if [ $? -eq 0 ]; then
-                                msg_ok "Rsyncing completed"
-                                msg "Creating symbolic link"
-                                ln -s /var/lib/nova/instances/snapshots_soriana/$SNAP_ID /var/lib/glance/images/$SNAP_ID 
-                                # Cuando se utiliza nova image-delete, el link simbólico es borrado y la info de 
-                                # metadata también, por lo que ahora ya no es posible identificar, a qué máquina 
-                                # le correspondía el archivo en /var/lib/nova/instances/snapshots_soriana/
-                                # Es necesario crear una relación para no perder el control.
-                                # Por el momento un archivo de texto, lo ideal sería una DB en sqlite
-                                record_snapshot_registry $SNAP_ID ${INSTANCE_NAME}_SNAP_$SNAPNAME
-                            else
-                                msg_error "Error moving image to  /var/lib/nova/instances/snapshots_soriana/"
-                            fi
-                        fi
                     else
                         msg_error "Error getting info of snapshot"
                     fi
