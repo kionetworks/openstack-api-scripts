@@ -9,7 +9,6 @@
 source bsfl
 
 LOG_ENABLED=y
-TEST="y"
 
 generate_UUID_file () {
     nova list --all-tenants | grep  Running | cut -d\| -f2 | sed 's/^[ \t]*//;s/[ \t]*$//' > $1
@@ -52,38 +51,91 @@ record_snapshot_registry () {
     echo "$SNAPID|$SNAPNAME" >> $REGISTRY_FILE
 }
 
-if [ ! -d snapshots_logs ]; then
-    mkdir snapshots_logs
-fi
+usage () {
+    echo "Usage: $0 -T <Tenant> [-a] [-U <Instance UUID>] [-t]" 
+    echo "-T : Tenant where the instance resides"
+    echo "-a : all instances"
+    echo "-U : UUID of the single instance to snapshot"
+    echo "-t : Test the instance with a script defined in"
+    echo "     /tmp/test_instance_id.txt file"
+    exit 1
+}
 
-LOG_FILE="snapshots_logs/snapshots_`date +%y-%m-%d_%H:%M:%S`.log"
+
+LOG_FILE="/var/log/snapshots/snapshots_`date +%y-%m-%d_%H:%M:%S`.log"
 
 if [ $EUID -ne 0 ]; then
     msg_error "Script must be run as root"
     exit 1
 fi
 
+if [ ! -d /var/log/snapshots ]; then
+    mkdir /var/log/snapshots
+fi
+
+TENANT=Soriana
+ALLINSTANCES=false
+TEST=false
+
+NUMARGS=$#
+if [ $NUMARGS -eq 0 ]; then
+    usage
+fi
+
+while getopts :T:taU:h OPT; do
+    case $OPT in
+        T)
+            TENANT=$OPTARG
+            ;;
+        a)
+            ALLINSTANCES=true
+            ;;
+        U)
+            ID=$OPTARG
+            ;;
+        t)
+            TEST=true
+            ;;
+        h)
+            usage
+            ;; 
+        \?)
+            echo "Option -$OPTARG not allowed."
+            usage
+            ;;
+        :)
+            echo "Option -$OPTARG requires an argument" >&2
+            usage
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
 msg "Loading credentials"
 
 source /root/admin_creds
 
 msg "Set Tenant Name"
-cmd "export OS_TENANT_NAME=XXXXXXX"
+export OS_TENANT_NAME=$TENANT
 
-msg "Generate temp file with all UUIDs of running instances"
-
-if [ "$TEST" == "y" ]; then
-    UUID_FILE="test_instance_id.txt"
+if [ "$TEST" == "true" ]; then
+    UUID_FILE="/tmp/test_instance_id.txt"
+    if [ ! -f $UUID_FILE ]; then
+        msg_error "$UUID_FILE does not exist"
+        exit 2
+    fi
 else
     UUID_FILE=$(mktemp)
 fi
 
-if [ "$TEST" != "y" ]; then
-    cmd "generate_UUID_file $UUID_FILE" 
-fi
-
-if [ -f uuids_no_qemu_agent.txt ]; then
-    rm uuids_no_qemu_agent.txt
+if [ "$TEST" == "false" ]; then
+    if [ "$ALLINSTANCES" == "true" ]; then
+        cmd "generate_UUID_file $UUID_FILE"
+    fi
+    if [ "$ALLINSTANCES" == "false" ] && [ -n $ID ]; then
+        UUID_FILE="/tmp/UUID.txt"
+        echo "$ID" > $UUID_FILE
+    fi
 fi
 
 for UUID in `cat $UUID_FILE`; do
@@ -96,7 +148,6 @@ for UUID in `cat $UUID_FILE`; do
     ssh $COMPUTE "virsh qemu-agent-command  $UUID '{\"execute\":\"guest-fsfreeze-status\"}'"
     if [ $? -eq 0 ]; then
         msg_ok "QEMU agent installed"
-        #TODO Make the snapshots
         msg "Freezing instance"
         ssh $COMPUTE "virsh qemu-agent-command $UUID '{\"execute\":\"guest-fsfreeze-freeze\"}'"
         if [ $? -eq 0 ]; then
@@ -107,7 +158,7 @@ for UUID in `cat $UUID_FILE`; do
             sleep 1
             msg "Get attached volumes"
             for VOL in `get_attached_volumes $UUID`; do
-                msg "Create snap fo $VOL"
+                msg "Create snap for $VOL"
                 SNAPNAME=`date +%Y-%m-%d_%H%M`
                 ssh $COMPUTE "rbd snap create ${VOL}@${SNAPNAME} 2>/dev/null"
                 if [ $? -eq 0 ]; then
@@ -122,8 +173,9 @@ for UUID in `cat $UUID_FILE`; do
                 # 
                 # Parece que no implica problema en la creación del snapshot de los vols
                 # Por el momento se redirecciona el error a /dev/null
-                if [ "$TEST" == "y" ]; then
+                if [ "$TEST" == "true" ]; then
                     # Delete snapshot
+                    msg_info "Deleting volume snapshots"
                     ssh $COMPUTE "rbd snap unprotect ${VOL}@${SNAPNAME} 2>/dev/null"
                     ssh $COMPUTE "rbd snap rm ${VOL}@${SNAPNAME} 2>/dev/null"
                 fi
@@ -135,14 +187,14 @@ for UUID in `cat $UUID_FILE`; do
                 msg "/var/lib/nova/instances/$UUID/disk exists"
                 msg "Creating the snapshot of disk"
                 # --poll Report the snapshot progress and poll until image creation is complete.
-                OS_TENANT_NAME=XXXXXXX nova image-create --poll $UUID ${INSTANCE_NAME}_SNAP_$SNAPNAME
+                OS_TENANT_NAME=$TENANT nova image-create --poll $UUID ${INSTANCE_NAME}_SNAP_$SNAPNAME
                 if [ $? -eq 0 ]; then
                     msg_ok "Snapshot created"
-                    OS_TENANT_NAME=XXXXXXX nova image-show ${INSTANCE_NAME}_SNAP_$SNAPNAME
+                    OS_TENANT_NAME=$TENANT nova image-show ${INSTANCE_NAME}_SNAP_$SNAPNAME
                     if [ $? -eq 0 ]; then
                         msg_ok "Getting info of snapshot"
                         msg "Get Glance ID of the snapshot"
-                        SNAP_ID=`OS_TENANT_NAME=XXXXXXX get_snapshot_id ${INSTANCE_NAME}_SNAP_$SNAPNAME`
+                        SNAP_ID=`OS_TENANT_NAME=$TENANT get_snapshot_id ${INSTANCE_NAME}_SNAP_$SNAPNAME`
                         msg_ok "Snap ID $SNAP_ID"
                     else
                         msg_error "Error getting info of snapshot"
@@ -171,7 +223,7 @@ for UUID in `cat $UUID_FILE`; do
     fi
 done
 
-if [ -f $UUID_FILE -a "$TEST" != "y" ]; then
+if [ -f $UUID_FILE -a "$TEST" == "false" ]; then
     rm $UUID_FILE
 fi
 
