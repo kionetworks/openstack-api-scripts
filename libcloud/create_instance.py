@@ -46,14 +46,49 @@ for instance in conn.list_nodes():
 	instance_exists = True
 
 if instance_exists:
-   print('Instance ' + testing_instance.name + ' already exists. Skipping creation.')
+    print('Instance ' + testing_instance.name + ' already exists. Skipping creation.')
 else:
+
+    keypair_name = 'the_key'
+    pub_key_file = '~/the_key.pub'
+    keypair_exists = False
+
+    for keypair in conn.list_key_pairs():
+        if keypair.name == keypair_name:
+            keypair_exists = True
+
+    if keypair_exists:
+        print('Keypair ' + keypair_name + ' already exists. Skipping import.')
+    else:
+        print('adding keypair...')
+        conn.import_key_pair_from_file(keypair_name, pub_key_file)
+
+
     testing_instance = conn.create_node(name=instance_name,
-				image=image,
-				size=flavor,
+                                image=image,
+                                size=flavor,
                                 networks=[the_network],
-				ex_admin_pass=password)
+                                ex_keyname=keypair_name)
+
     conn.wait_until_running([testing_instance])
+
+    print('Checking for unused Floating IP...')
+    unused_floating_ip = None
+
+    if not unused_floating_ip:
+        pool = conn.ex_list_floating_ip_pools()[0]
+        print('Allocating new Floating IP from pool: {}'.format(pool))
+        unused_floating_ip = pool.create_floating_ip()
+
+    for floating_ip in conn.ex_list_floating_ips():
+        if not floating_ip.node_id:
+            unused_floating_ip = floating_ip
+            break
+
+    if len(testing_instance.public_ips) > 0:
+        print('Instance ' + testing_instance.name + ' already has a public ip. Skipping attachment.')
+    else:
+        conn.ex_attach_floating_ip_to_node(testing_instance, unused_floating_ip)
 
 for instance in conn.list_nodes():
     if instance.name == instance_name:
