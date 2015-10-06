@@ -4,7 +4,7 @@
 # The script is executed in the controller
 # Sergio Cuellar
 # Sep 2015
-# Ver 0.1
+# Ver 0.2
 
 source bsfl
 
@@ -58,6 +58,30 @@ usage () {
     echo "-U : UUID of the single instance to snapshot"
     echo "-t : Test the instance with a script defined in"
     echo "     /tmp/test_instance_id.txt file"
+    echo "-c : Check in all instances if qemu agent is installed and exits"
+    exit 1
+}
+
+check_for_qemuagent () {
+    UUID_FILE="/tmp/test_instance_id.txt"
+    generate_UUID_file $UUID_FILE
+
+    if [ -f /tmp/uuids_no_qemu_agent.txt ]; then
+        rm /tmp/uuids_no_qemu_agent.txt
+    fi
+
+    for UUID in `cat $UUID_FILE`; do
+        INSTANCE_NAME=`get_instance_name $UUID`
+        COMPUTE=`get_compute_host $UUID`
+        ssh $COMPUTE "virsh qemu-agent-command  $UUID '{\"execute\":\"guest-fsfreeze-status\"}' &>/dev/null"
+        if [ $? -ne 0 ]; then
+            msg_error "$INSTANCE_NAME ($UUID)"
+            echo "$UUID|$INSTANCE_NAME" >> /tmp/uuids_no_qemu_agent.txt
+        else
+            msg_ok "$INSTANCE_NAME ($UUID)"
+        fi
+    done
+    rm $UUID_FILE
     exit 1
 }
 
@@ -76,13 +100,21 @@ fi
 TENANT=Soriana
 ALLINSTANCES=false
 TEST=false
+CHECK=false
 
 NUMARGS=$#
 if [ $NUMARGS -eq 0 ]; then
     usage
 fi
 
-while getopts :T:taU:h OPT; do
+msg "Loading credentials"
+
+source /root/admin_creds
+
+msg "Set Tenant Name"
+export OS_TENANT_NAME=$TENANT
+
+while getopts :T:tcaU:h OPT; do
     case $OPT in
         T)
             TENANT=$OPTARG
@@ -95,6 +127,10 @@ while getopts :T:taU:h OPT; do
             ;;
         t)
             TEST=true
+            ;;
+        c)
+            CHECK=true
+            check_for_qemuagent
             ;;
         h)
             usage
@@ -111,12 +147,6 @@ while getopts :T:taU:h OPT; do
 done
 shift $((OPTIND-1))
 
-msg "Loading credentials"
-
-source /root/admin_creds
-
-msg "Set Tenant Name"
-export OS_TENANT_NAME=$TENANT
 
 if [ "$TEST" == "true" ]; then
     UUID_FILE="/tmp/test_instance_id.txt"
