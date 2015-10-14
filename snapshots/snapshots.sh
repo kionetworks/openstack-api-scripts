@@ -6,7 +6,7 @@
 # Sep 2015
 # Ver 0.2
 
-source bsfl
+source /usr/local/etc/bsfl
 
 LOG_ENABLED=y
 
@@ -52,13 +52,14 @@ record_snapshot_registry () {
 }
 
 usage () {
-    echo "Usage: $0 -T <Tenant> [-a] [-U <Instance UUID>] [-t]" 
+    echo "Usage: $0 -T <Tenant> [-a] [-U <Instance UUID>] [-t] [-f <File with UUIDs>]" 
     echo "-T : Tenant where the instance resides"
     echo "-a : all instances"
     echo "-U : UUID of the single instance to snapshot"
     echo "-t : Test the instance with a script defined in"
     echo "     /tmp/test_instance_id.txt file"
     echo "-c : Check in all instances if qemu agent is installed and exits"
+    echo "-f : Make snapshot of instances defined in a file"
     exit 1
 }
 
@@ -101,6 +102,8 @@ TENANT=Soriana
 ALLINSTANCES=false
 TEST=false
 CHECK=false
+FILE=false
+ONEUUID=false
 
 NUMARGS=$#
 if [ $NUMARGS -eq 0 ]; then
@@ -114,7 +117,7 @@ source /root/admin_creds
 msg "Set Tenant Name"
 export OS_TENANT_NAME=$TENANT
 
-while getopts :T:tcaU:h OPT; do
+while getopts :T:f:tcaU:h OPT; do
     case $OPT in
         T)
             TENANT=$OPTARG
@@ -123,10 +126,15 @@ while getopts :T:tcaU:h OPT; do
             ALLINSTANCES=true
             ;;
         U)
+            ONEUUID=true
             ID=$OPTARG
             ;;
         t)
             TEST=true
+            ;;
+        f)
+            FILE=true
+            UUID_FILE=$OPTARG
             ;;
         c)
             CHECK=true
@@ -154,7 +162,9 @@ if [ "$TEST" == "true" ]; then
         msg_error "$UUID_FILE does not exist"
         exit 2
     fi
-else
+fi
+
+if [ "$FILE" == "false" ]; then
     UUID_FILE=$(mktemp)
 fi
 
@@ -162,7 +172,7 @@ if [ "$TEST" == "false" ]; then
     if [ "$ALLINSTANCES" == "true" ]; then
         cmd "generate_UUID_file $UUID_FILE"
     fi
-    if [ "$ALLINSTANCES" == "false" ] && [ -n $ID ]; then
+    if [ "$ALLINSTANCES" == "false" ] && [ "$ONEUUID" == true ]; then
         UUID_FILE="/tmp/UUID.txt"
         echo "$ID" > $UUID_FILE
     fi
@@ -253,7 +263,7 @@ for UUID in `cat $UUID_FILE`; do
     fi
 done
 
-if [ -f $UUID_FILE -a "$TEST" == "false" ]; then
+if [ -f $UUID_FILE ] && [ "$TEST" == "false" ] && [ "$FILE" == "false" ]; then
     rm $UUID_FILE
 fi
 
