@@ -3,8 +3,11 @@
 # Script to make automatic snapshots
 # The script is executed in the controller
 # Sergio Cuellar
-# Sep 2015
-# Ver 0.2
+# March 2016
+# Ver 0.3
+# There is an issue freezing the instance [1], it's paused after the process ends.
+# So for now, the freezing isn't going to be used.
+# http://docs.openstack.org/openstack-ops/content/snapshots.html
 
 source /usr/local/etc/bsfl
 
@@ -116,6 +119,7 @@ source /root/admin_creds
 
 msg "Set Tenant Name"
 export OS_TENANT_NAME=$TENANT
+export OS_PROJECT_NAME=$TENANT
 
 while getopts :T:f:tcaU:h OPT; do
     case $OPT in
@@ -184,82 +188,58 @@ for UUID in `cat $UUID_FILE`; do
     msg "Get compute where $UUID is stored"
     COMPUTE=`get_compute_host $UUID`
     msg_ok "$COMPUTE for $UUID"
-    msg "Status of QEMU agent for instance $UUID"
-    ssh $COMPUTE "virsh qemu-agent-command  $UUID '{\"execute\":\"guest-fsfreeze-status\"}'"
-    if [ $? -eq 0 ]; then
-        msg_ok "QEMU agent installed"
-        msg "Freezing instance"
-        ssh $COMPUTE "virsh qemu-agent-command $UUID '{\"execute\":\"guest-fsfreeze-freeze\"}'"
+    msg "Get attached volumes"
+    for VOL in `get_attached_volumes $UUID`; do
+        msg "Create snap for $VOL"
+        SNAPNAME=`date +%Y-%b-%d_%H%M`
+        ssh $COMPUTE "rbd snap create ${VOL}@${SNAPNAME} 2>/dev/null"
         if [ $? -eq 0 ]; then
-            msg_ok "Instance is freezed"
-            sleep 1
-            msg "Get status of the instance"
-            ssh $COMPUTE "virsh qemu-agent-command $UUID '{\"execute\":\"guest-fsfreeze-status\"}'"
-            sleep 1
-            msg "Get attached volumes"
-            for VOL in `get_attached_volumes $UUID`; do
-                msg "Create snap for $VOL"
-                SNAPNAME=`date +%Y-%m-%d_%H%M`
-                ssh $COMPUTE "rbd snap create ${VOL}@${SNAPNAME} 2>/dev/null"
-                if [ $? -eq 0 ]; then
-                    msg_ok "Snap of $VOL created"
-                    ssh $COMPUTE "rbd snap ls $VOL 2>/dev/null" 
-                fi
-                # Al ejecutar comandos de rbd se obtiene el siguiente mensaje
-                #
-                # 2015-09-22 11:32:45.793711 7f49875df840 -1 asok(0x35699e0) AdminSocketConfigObs::init: 
-                # failed: AdminSocket::bind_and_listen: failed to bind the UNIX domain 
-                # socket to '/var/run/ceph/rbd-client-107058.asok': (2) No such file or directory
-                # 
-                # Parece que no implica problema en la creación del snapshot de los vols
-                # Por el momento se redirecciona el error a /dev/null
-                if [ "$TEST" == "true" ]; then
-                    # Delete snapshot
-                    msg_info "Deleting volume snapshots"
-                    ssh $COMPUTE "rbd snap unprotect ${VOL}@${SNAPNAME} 2>/dev/null"
-                    ssh $COMPUTE "rbd snap rm ${VOL}@${SNAPNAME} 2>/dev/null"
-                fi
-            done
-            # Copy the disk file
-            SNAPNAME=`date +%Y-%m-%d_%H%M`
-            ssh $COMPUTE "ls /var/lib/nova/instances/$UUID/disk"
-            if [ $? -eq 0 ]; then
-                msg "/var/lib/nova/instances/$UUID/disk exists"
-                msg "Creating the snapshot of disk"
-                # --poll Report the snapshot progress and poll until image creation is complete.
-                OS_TENANT_NAME=$TENANT nova image-create --poll $UUID ${INSTANCE_NAME}_SNAP_$SNAPNAME
-                if [ $? -eq 0 ]; then
-                    msg_ok "Snapshot created"
-                    OS_TENANT_NAME=$TENANT nova image-show ${INSTANCE_NAME}_SNAP_$SNAPNAME
-                    if [ $? -eq 0 ]; then
-                        msg_ok "Getting info of snapshot"
-                        msg "Get Glance ID of the snapshot"
-                        SNAP_ID=`OS_TENANT_NAME=$TENANT get_snapshot_id ${INSTANCE_NAME}_SNAP_$SNAPNAME`
-                        msg_ok "Snap ID $SNAP_ID"
-                    else
-                        msg_error "Error getting info of snapshot"
-                    fi
+            msg_ok "Snap of $VOL created"
+            ssh $COMPUTE "rbd snap ls $VOL 2>/dev/null" 
+        fi
+        # Al ejecutar comandos de rbd se obtiene el siguiente mensaje
+        #
+        # 2015-09-22 11:32:45.793711 7f49875df840 -1 asok(0x35699e0) AdminSocketConfigObs::init: 
+        # failed: AdminSocket::bind_and_listen: failed to bind the UNIX domain 
+        # socket to '/var/run/ceph/rbd-client-107058.asok': (2) No such file or directory
+        # 
+        # Parece que no implica problema en la creación del snapshot de los vols
+        # Por el momento se redirecciona el error a /dev/null
+        if [ "$TEST" == "true" ]; then
+            # Delete snapshot
+            msg_info "Deleting volume snapshots"
+            ssh $COMPUTE "rbd snap unprotect ${VOL}@${SNAPNAME} 2>/dev/null"
+            ssh $COMPUTE "rbd snap rm ${VOL}@${SNAPNAME} 2>/dev/null"
+        fi
+    done
+    # Copy the disk file
+    SNAPNAME=`date +%Y-%b-%d_%H%M`
+    ssh $COMPUTE "ls /var/lib/nova/instances/$UUID/disk"
+    if [ $? -eq 0 ]; then
+        msg "/var/lib/nova/instances/$UUID/disk exists"
+        msg "Creating the snapshot of disk"
+        # --poll Report the snapshot progress and poll until image creation is complete.
+        #OS_TENANT_NAME=$TENANT nova image-create --poll $UUID ${INSTANCE_NAME}_SNAP_$SNAPNAME
+        ssh $COMPUTE "qemu-img convert -O qcow2 -f qcow2 /var/lib/nova/instances/$UUID/disk /var/lib/nova/instances/snapshots/${UUID}_disk-${SNAPNAME}"
+        if [ $? -eq 0 ]; then
+            msg_ok "Snapshot created"
+            #OS_TENANT_NAME=$TENANT nova image-show ${INSTANCE_NAME}_SNAP_$SNAPNAME
+            ssh $COMPUTE "ls -lh /var/lib/nova/instances/snapshots/${UUID}_disk-${SNAPNAME}"
+            #if [ $? -eq 0 ]; then
+            #    msg_ok "Getting info of snapshot"
+            #    msg "Get Glance ID of the snapshot"
+            #    SNAP_ID=`OS_TENANT_NAME=$TENANT get_snapshot_id ${INSTANCE_NAME}_SNAP_$SNAPNAME`
+            #    msg_ok "Snap ID $SNAP_ID"
+            #else
+            #    msg_error "Error getting info of snapshot"
+            #fi
 
-                else
-                    msg_error "Cannot create the snapshot for ${INSTANCE_NAME}"
-                fi
-            else
-                msg_info "/var/lib/nova/instances/$UUID/disk does not exist"
-                msg_info "The instance has only volumes"
-            fi
-            msg "Unfreeze the instance"
-            ssh $COMPUTE "virsh qemu-agent-command $UUID '{\"execute\":\"guest-fsfreeze-thaw\"}'"
-            if [ $? -eq 0 ]; then
-                msg_ok "Instance unfreezed"
-                ssh $COMPUTE "virsh qemu-agent-command $UUID '{\"execute\":\"guest-fsfreeze-status\"}'"
-            fi
         else
-            msg_error "The instance could not be freezed"
-            exit 2
+            msg_error "Cannot create the snapshot for ${INSTANCE_NAME}"
         fi
     else
-        msg_error "QEMU agent not installed for $UUID"
-        echo "$UUID" >> uuids_no_qemu_agent.txt
+        msg_info "/var/lib/nova/instances/$UUID/disk does not exist"
+        msg_info "The instance has only volumes"
     fi
 done
 
