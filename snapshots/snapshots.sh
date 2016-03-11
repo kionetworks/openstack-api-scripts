@@ -12,6 +12,7 @@
 source /usr/local/etc/bsfl
 
 LOG_ENABLED=y
+POOL=cinder-volumes
 
 generate_UUID_file () {
     nova list --all-tenants | grep  Running | cut -d\| -f2 | sed 's/^[ \t]*//;s/[ \t]*$//' > $1
@@ -29,7 +30,7 @@ get_attached_volumes () {
     VOLUMES=$(echo "$VM" | grep "os-extended-volumes:volumes_attached" | cut -d'|' -f3 | tr -d "[]{}\"" |  sed 's/^[ \t]*//;s/[ \t]*$//' |awk -F',' '{for (i=1;i<=NF;i++) print $i}')
     if [ ! -z "$VOLUMES" ]; then
         while IFS= read -r LINE; do
-            echo volumes/volume-$(echo $LINE | cut -d':' -f2 | tr -d " ")
+            echo ${POOL}/volume-$(echo $LINE | cut -d':' -f2 | tr -d " ")
         done <<< "$VOLUMES"
     fi
 }
@@ -45,13 +46,14 @@ get_snapshot_id () {
 }
 
 record_snapshot_registry () {
-    SNAPID=$1
+    UUID=$1
     SNAPNAME=$2
-    REGISTRY_FILE=/var/lib/nova/instances/snapshots_soriana/snapshot_registry.txt
+    REGISTRY_FILE=/var/log/snapshots/snapshot_registry.txt
     if [ ! -f $REGISTRY_FILE ]; then
         touch $REGISTRY_FILE
     fi
-    echo "$SNAPID|$SNAPNAME" >> $REGISTRY_FILE
+    D=`date +%d-%b-%y`
+    echo "$D|$UUID|$SNAPNAME" >> $REGISTRY_FILE
 }
 
 usage () {
@@ -188,14 +190,26 @@ for UUID in `cat $UUID_FILE`; do
     msg "Get compute where $UUID is stored"
     COMPUTE=`get_compute_host $UUID`
     msg_ok "$COMPUTE for $UUID"
+    # Uncomment the following lines if the instance has an ephemeral disk in RBD 
+    #
+    #msg "Create snap for the volume of the OS disk"
+    #SNAPNAME=`date +%Y-%b-%d_%H%M`
+    #cmd "rbd snap create ephemeral-vms/${UUID}_disk@${SNAPNAME} 2>/dev/null"
+    #if [ $? -eq 0 ]; then
+    #    msg_ok "Snap of $VOL created"
+    #    cmd "rbd snap ls ephemeral-vms/${UUID}_disk 2>/dev/null"
+    #    record_snapshot_registry $UUID ephemeral-vms/${UUID}_disk
+    #fi
+    # End of uncomment
     msg "Get attached volumes"
     for VOL in `get_attached_volumes $UUID`; do
         msg "Create snap for $VOL"
         SNAPNAME=`date +%Y-%b-%d_%H%M`
-        ssh $COMPUTE "rbd snap create ${VOL}@${SNAPNAME} 2>/dev/null"
+        cmd "rbd snap create ${VOL}@${SNAPNAME} 2>/dev/null"
         if [ $? -eq 0 ]; then
             msg_ok "Snap of $VOL created"
-            ssh $COMPUTE "rbd snap ls $VOL 2>/dev/null" 
+            cmd "rbd snap ls $VOL 2>/dev/null" 
+            record_snapshot_registry $UUID ${VOL}@${SNAPNAME}
         fi
         # Al ejecutar comandos de rbd se obtiene el siguiente mensaje
         #
@@ -208,8 +222,8 @@ for UUID in `cat $UUID_FILE`; do
         if [ "$TEST" == "true" ]; then
             # Delete snapshot
             msg_info "Deleting volume snapshots"
-            ssh $COMPUTE "rbd snap unprotect ${VOL}@${SNAPNAME} 2>/dev/null"
-            ssh $COMPUTE "rbd snap rm ${VOL}@${SNAPNAME} 2>/dev/null"
+            cmd "rbd snap unprotect ${VOL}@${SNAPNAME} 2>/dev/null"
+            cmd "rbd snap rm ${VOL}@${SNAPNAME} 2>/dev/null"
         fi
     done
     # Copy the disk file
