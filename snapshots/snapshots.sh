@@ -198,7 +198,7 @@ for UUID in `cat $UUID_FILE`; do
     #if [ $? -eq 0 ]; then
     #    msg_ok "Snap of $VOL created"
     #    cmd "rbd snap ls ephemeral-vms/${UUID}_disk 2>/dev/null"
-    #    record_snapshot_registry $UUID ephemeral-vms/${UUID}_disk
+    #    record_snapshot_registry $UUID ephemeral-vms/${UUID}_disk@{SNAPNAME}
     #fi
     # End of uncomment
     msg "Get attached volumes"
